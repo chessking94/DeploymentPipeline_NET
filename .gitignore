@@ -1,0 +1,8 @@
+# directories
+.vs/
+bin/
+obj/
+
+# files
+*.user
+appsettings.json
