@@ -6,3 +6,4 @@ obj/
 # files
 *.user
 appsettings.json
+*.pubxml
