@@ -131,7 +131,7 @@ namespace DeploymentPipeline
 
             if (canBuild)
             {
-                if (!System.IO.Directory.Exists(PublishDir))
+                if (!String.IsNullOrWhiteSpace(PublishDir) && !System.IO.Directory.Exists(PublishDir))
                 {
                     modLogging.AddLog(Program.programName, "C#", "Project.CanBuild", modLogging.eLogLevel.ERROR, $"Project '{Name}' has an invalid publish directory '{PublishDir}'", Program.logMethod);
                     canBuild = false;
@@ -195,12 +195,14 @@ namespace DeploymentPipeline
         /// </summary>
         internal bool Publish()
         {
-            // dotnet publish {self.name}.{self.project_extension} -c Release --no-build -o "{self.publish_dir}"
-            Int32 exitCode = modCommandLine.RunCommand($"dotnet publish {Name}.{ProjectExtension} -c Release --no-build -o \"{PublishDir}\"", Directory);
-            if (exitCode != 0)
+            if (!String.IsNullOrWhiteSpace(PublishDir))
             {
-                modLogging.AddLog(Program.programName, "C#", "Project.Publish", modLogging.eLogLevel.ERROR, $"Project '{Name}' build failed", Program.logMethod);
-                return false;
+                Int32 exitCode = modCommandLine.RunCommand($"dotnet publish {Name}.{ProjectExtension} -c Release --no-build -o \"{PublishDir}\"", Directory);
+                if (exitCode != 0)
+                {
+                    modLogging.AddLog(Program.programName, "C#", "Project.Publish", modLogging.eLogLevel.ERROR, $"Project '{Name}' build failed", Program.logMethod);
+                    return false;
+                }
             }
             return true;
         }
