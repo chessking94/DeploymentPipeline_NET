@@ -33,12 +33,27 @@ namespace DeploymentPipeline
             }
 
             var projects = config["projects"];
+            string projectsDeployed = "";
             foreach (var entry in projects)
             {
                 var project = new Project(entry.Name, entry.Value);
-                project.Deploy();
+                if (project.Deploy())
+                {
+                    if (String.IsNullOrWhiteSpace(projectsDeployed))
+                    {
+                        projectsDeployed = entry.Name;
+                    }
+                    else
+                    {
+                        projectsDeployed += $", {entry.Name}";
+                    }
+                }
             }
 #if !DEBUG
+            if (!String.IsNullOrWhiteSpace(projectsDeployed))
+            {
+                modNotifications.SendTelegramMessage($"A following projects have been deployed: {projectsDeployed}");
+            }
             modLogging.AddLog(programName, "C#", "Program.Main", modLogging.eLogLevel.INFO, "Process ended", logMethod);
 #endif
         }
@@ -72,15 +87,15 @@ namespace DeploymentPipeline
         /// <summary>
         /// Perform a project deployment
         /// </summary>
-        public void Deploy()
+        public bool Deploy()
         {
+            bool deployed = false;
             // if the trigger file exists, proceed with deployment
             string deploymentFile = Path.Combine(Directory, DeployFile);
             if (File.Exists(deploymentFile))
             {
                 modLogging.AddLog(Program.programName, "C#", "Project.Deploy", modLogging.eLogLevel.INFO, $"Deploying project '{Name}'", Program.logMethod);
 
-                bool deployed = false;
                 if (Pull())
                 {
                     if (!DoBuild)
@@ -111,6 +126,8 @@ namespace DeploymentPipeline
                     modLogging.AddLog(Program.programName, "C#", "Project.Deploy", modLogging.eLogLevel.WARNING, $"Project '{Name}' deployment failed", Program.logMethod);
                 }
             }
+
+            return deployed;
         }
 
         /// <summary>
