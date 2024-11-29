@@ -39,15 +39,9 @@ namespace DeploymentPipeline
                 var project = new Project(entry.Name, entry.Value);
                 if (project.Deploy())
                 {
-                    if (String.IsNullOrWhiteSpace(projectsDeployed))
-                    {
-                        projectsDeployed = entry.Name;
-                    }
-                    else
-                    {
-                        projectsDeployed += $", {entry.Name}";
-                    }
+                    projectsDeployed = modStrings.AppendText(projectsDeployed, entry.Name, ", ");
                 }
+                // no need to have error handling/notifications if a deployment fails, that is handled in the AddLog call in each step
             }
 #if !DEBUG
             if (!String.IsNullOrWhiteSpace(projectsDeployed))
@@ -64,24 +58,31 @@ namespace DeploymentPipeline
     /// </summary>
     internal class Project
     {
+        public bool Active { get; }
         public string Name { get; }
         public string Directory { get; }
         public string Branch { get; }
         public string Language { get; }
         public string PublishDir { get; }
+        public string PostDeployBatchFile { get; }
         public bool DoBuild { get; }
         public string ProjectExtension { get; }
+        public bool HasPostDeploy { get; }
+
         private const string DeployFile = "deploy.txt";
 
         public Project(string name, dynamic properties)
         {
             Name = name;
+            Active = properties["active"];
             Directory = properties["directory"];
             Branch = properties["branch"];
             Language = properties["language"];
             PublishDir = properties["publishLocation"];
+            PostDeployBatchFile = properties["postDeployBatchFile"];
             DoBuild = CanBuild();
             ProjectExtension = GetProjectExtension();
+            HasPostDeploy = CanPostDeploy();
         }
 
         /// <summary>
@@ -92,7 +93,7 @@ namespace DeploymentPipeline
             bool deployed = false;
             // if the trigger file exists, proceed with deployment
             string deploymentFile = Path.Combine(Directory, DeployFile);
-            if (File.Exists(deploymentFile))
+            if (Active && File.Exists(deploymentFile))
             {
                 modLogging.AddLog(Program.programName, "C#", "Project.Deploy", modLogging.eLogLevel.INFO, $"Deploying project '{Name}'", Program.logMethod);
 
@@ -116,6 +117,14 @@ namespace DeploymentPipeline
 
                 // remove the deployment trigger file
                 File.Delete(deploymentFile);
+
+                if (deployed && HasPostDeploy)
+                {
+                    if (!PostDeploy())
+                    {
+                        deployed = false;
+                    }
+                }
 
                 if (deployed)
                 {
@@ -184,6 +193,18 @@ namespace DeploymentPipeline
         }
 
         /// <summary>
+        /// Determine if the project has a post-deploy process
+        /// </summary>
+        internal bool CanPostDeploy()
+        {
+            if (!String.IsNullOrWhiteSpace(PostDeployBatchFile) && File.Exists(PostDeployBatchFile))
+            {
+                return true;
+            }
+            return false;
+        }
+
+        /// <summary>
         /// Pull the specified Git branch
         /// </summary>
         internal bool Pull()
@@ -224,6 +245,20 @@ namespace DeploymentPipeline
                     modLogging.AddLog(Program.programName, "C#", "Project.Publish", modLogging.eLogLevel.ERROR, $"Project '{Name}' build failed", Program.logMethod);
                     return false;
                 }
+            }
+            return true;
+        }
+
+        /// <summary>
+        /// Execute the project post-deployment batch script
+        /// </summary>
+        internal bool PostDeploy()
+        {
+            Int32 exitCode = modCommandLine.RunCommand(PostDeployBatchFile);  // TODO: do I need to run this in a specific directory?
+            if (exitCode != 0)
+            {
+                modLogging.AddLog(Program.programName, "C#", "Project.PostDeploy", modLogging.eLogLevel.ERROR, $"Post-deploy for project '{Name}' failed", Program.logMethod);
+                return false;
             }
             return true;
         }
