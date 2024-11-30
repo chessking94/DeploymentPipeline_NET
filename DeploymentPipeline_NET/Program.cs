@@ -1,7 +1,5 @@
-﻿using Microsoft.VisualBasic.FileIO;
-using Newtonsoft.Json;
+﻿using Newtonsoft.Json;
 using System.Diagnostics;
-using System.Net;
 using System.Reflection;
 using Utilities_NetCore;
 
@@ -157,6 +155,8 @@ namespace DeploymentPipeline
                 string deploymentFile = Path.Combine(Directory, DeployFile);
                 File.Delete(deploymentFile);
 
+                deployed = InstallDependencies();
+
                 if (deployed && HasPostDeploy)
                 {
                     if (!PostDeploy())
@@ -298,11 +298,34 @@ namespace DeploymentPipeline
         }
 
         /// <summary>
+        /// Install any dependencies for the project. Mainly used for Python.
+        /// </summary>
+        internal bool InstallDependencies()
+        {
+            switch (Language.ToUpper())
+            {
+                case "PYTHON":
+                    if (File.Exists(Path.Combine(Directory, "requirements.txt")))
+                    {
+                        Int32 exitCode = modCommandLine.RunCommand($"pip install -r requirements.txt", Directory);
+                        if (exitCode != 0)
+                        {
+                            modLogging.AddLog(Program.programName, "C#", "Project.InstallRequirements", modLogging.eLogLevel.ERROR, $"Project '{Name}' requirements.txt install failed", Program.logMethod);
+                            return false;
+                        }
+                    }
+                    return true;
+                default:
+                    return true;
+            }
+        }
+
+        /// <summary>
         /// Execute the project post-deployment batch script
         /// </summary>
         internal bool PostDeploy()
         {
-            Int32 exitCode = modCommandLine.RunCommand(PostDeployBatchFile);  // TODO: do I need to run this in a specific directory?
+            Int32 exitCode = modCommandLine.RunCommand(PostDeployBatchFile, Directory);  // likely don't need this in the project directory, but will be consistent
             if (exitCode != 0)
             {
                 modLogging.AddLog(Program.programName, "C#", "Project.PostDeploy", modLogging.eLogLevel.ERROR, $"Post-deploy for project '{Name}' failed", Program.logMethod);
