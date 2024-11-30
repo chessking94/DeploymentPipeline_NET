@@ -7,3 +7,4 @@ obj/
 *.user
 appsettings.json
 *.pubxml
+PendingDeployment.html

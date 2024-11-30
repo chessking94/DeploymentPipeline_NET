@@ -1,4 +1,7 @@
-﻿using Newtonsoft.Json;
+﻿using Microsoft.VisualBasic.FileIO;
+using Newtonsoft.Json;
+using System.Diagnostics;
+using System.Net;
 using System.Reflection;
 using Utilities_NetCore;
 
@@ -13,7 +16,7 @@ namespace DeploymentPipeline
         public const modLogging.eLogMethod logMethod = modLogging.eLogMethod.DATABASE;
 #endif
 
-        static void Main()
+        static void Main(string[] args)
         {
 #if DEBUG
             string projectDir = Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..\\..\\.."));
@@ -25,31 +28,64 @@ namespace DeploymentPipeline
 #endif
             string configFile = Path.Combine(projectDir, "appsettings.json");
             dynamic config = JsonConvert.DeserializeObject(File.ReadAllText(configFile))!;
-
-            if (connectionString == null)
-            {
-                modLogging.AddLog(programName, "C#", "Program.Main", modLogging.eLogLevel.CRITICAL, "Unable to read connection string", logMethod);
-                Environment.Exit(-1);
-            }
-
+            
             var projects = config["projects"];
-            string projectsDeployed = "";
-            foreach (var entry in projects)
+
+            if (args.Length == 0)
             {
-                var project = new Project(entry.Name, entry.Value);
-                if (project.Deploy())
+                // no argument was passed, only check to see what applications are pending deployment
+                string htmlBody = "<h1><b>Projects Pending Deployment</b></h1>";  // document header
+                htmlBody += "<br>";
+                htmlBody += "<table>";
+                htmlBody += "<tr><th>Project Name</th></tr>";  // table column header
+
+                foreach (var entry in projects)
                 {
-                    projectsDeployed = modStrings.AppendText(projectsDeployed, entry.Name, ", ");
+                    var project = new Project(entry.Name, entry.Value);
+                    if (project.DoDeploy)
+                    {
+                        htmlBody += $"<tr><td>{project.Name}</td></tr>";  // table entry
+                    }
                 }
-                // no need to have error handling/notifications if a deployment fails, that is handled in the AddLog call in each step
+
+                htmlBody += "</table>";
+
+                // write and open the report
+                string pendingDeploymentReport = Path.Combine(projectDir, "PendingDeployment.html");
+                File.WriteAllText(pendingDeploymentReport, htmlBody);
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = pendingDeploymentReport,
+                    UseShellExecute = true // Required for opening with the default application
+                });
             }
-#if !DEBUG
-            if (!String.IsNullOrWhiteSpace(projectsDeployed))
+            else
             {
-                modNotifications.SendTelegramMessage($"A following projects have been deployed: {projectsDeployed}");
+                // there was an argument (using "DEPLOY"), perform the deployment(s)
+                if (connectionString == null)
+                {
+                    modLogging.AddLog(programName, "C#", "Program.Main", modLogging.eLogLevel.CRITICAL, "Unable to read connection string", logMethod);
+                    Environment.Exit(-1);
+                }
+
+                string projectsDeployed = "";
+                foreach (var entry in projects)
+                {
+                    var project = new Project(entry.Name, entry.Value);
+                    if (project.Deploy())
+                    {
+                        projectsDeployed = modStrings.AppendText(projectsDeployed, entry.Name, ", ");
+                    }
+                    // no need to have error handling/notifications if a deployment fails, that is handled in the AddLog call in each step
+                }
+#if !DEBUG
+                if (!String.IsNullOrWhiteSpace(projectsDeployed))
+                {
+                    modNotifications.SendTelegramMessage($"A following projects have been deployed: {projectsDeployed}");
+                }
+                modLogging.AddLog(programName, "C#", "Program.Main", modLogging.eLogLevel.INFO, "Process ended", logMethod);
+#endif   
             }
-            modLogging.AddLog(programName, "C#", "Program.Main", modLogging.eLogLevel.INFO, "Process ended", logMethod);
-#endif
         }
     }
 
@@ -65,6 +101,7 @@ namespace DeploymentPipeline
         public string Language { get; }
         public string PublishDir { get; }
         public string PostDeployBatchFile { get; }
+        public bool DoDeploy { get; }
         public bool DoBuild { get; }
         public string ProjectExtension { get; }
         public bool HasPostDeploy { get; }
@@ -80,6 +117,8 @@ namespace DeploymentPipeline
             Language = properties["language"];
             PublishDir = properties["publishLocation"];
             PostDeployBatchFile = properties["postDeployBatchFile"];
+
+            DoDeploy = CanDeploy();
             DoBuild = CanBuild();
             ProjectExtension = GetProjectExtension();
             HasPostDeploy = CanPostDeploy();
@@ -92,8 +131,7 @@ namespace DeploymentPipeline
         {
             bool deployed = false;
             // if the trigger file exists, proceed with deployment
-            string deploymentFile = Path.Combine(Directory, DeployFile);
-            if (Active && File.Exists(deploymentFile))
+            if (DoDeploy)
             {
                 modLogging.AddLog(Program.programName, "C#", "Project.Deploy", modLogging.eLogLevel.INFO, $"Deploying project '{Name}'", Program.logMethod);
 
@@ -116,6 +154,7 @@ namespace DeploymentPipeline
                 }
 
                 // remove the deployment trigger file
+                string deploymentFile = Path.Combine(Directory, DeployFile);
                 File.Delete(deploymentFile);
 
                 if (deployed && HasPostDeploy)
@@ -137,6 +176,15 @@ namespace DeploymentPipeline
             }
 
             return deployed;
+        }
+
+        internal bool CanDeploy()
+        {
+            if (Active && File.Exists(Path.Combine(Directory, DeployFile)))
+            {
+                return true;
+            }
+            return false;
         }
 
         /// <summary>
