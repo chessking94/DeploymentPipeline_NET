@@ -20,7 +20,7 @@ namespace DeploymentPipeline
             string projectDir = Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..\\..\\.."));
             string? connectionString = Environment.GetEnvironmentVariable("ConnectionStringDebug");
 #else
-            modLogging.AddLog(programName, "C#", "Program.Main", modLogging.eLogLevel.INFO, "Process started", logMethod);
+            // modLogging.AddLog(programName, "C#", "Program.Main", modLogging.eLogLevel.INFO, "Process started", logMethod);
             string projectDir = Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, ".."));
             string? connectionString = Environment.GetEnvironmentVariable("ConnectionStringRelease");
 #endif
@@ -81,7 +81,7 @@ namespace DeploymentPipeline
                 {
                     modNotifications.SendTelegramMessage($"A following projects have been deployed: {projectsDeployed}");
                 }
-                modLogging.AddLog(programName, "C#", "Program.Main", modLogging.eLogLevel.INFO, "Process ended", logMethod);
+                // modLogging.AddLog(programName, "C#", "Program.Main", modLogging.eLogLevel.INFO, "Process ended", logMethod);
 #endif   
             }
         }
