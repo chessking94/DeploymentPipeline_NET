@@ -105,7 +105,7 @@ ORDER BY DeploymentGroup, RepoName
 #if !DEBUG
                     if (!String.IsNullOrWhiteSpace(projectsDeployed))
                     {
-                        modNotifications.SendTelegramMessage($"A following projects have been deployed: {projectsDeployed}");
+                        modNotifications.SendTelegramMessage($"The following project(s) have been deployed: {projectsDeployed}");
                     }
 #endif
                 }
@@ -282,7 +282,7 @@ ORDER BY DeploymentGroup, RepoName
         /// </summary>
         internal bool Build()
         {
-            Int32 exitCode = modCommandLine.RunCommand("dotnet build -c Release", ProjectFile);
+            Int32 exitCode = modCommandLine.RunCommand("dotnet build -c Release", ProjectPath);
             if (exitCode != 0)
             {
                 modLogging.AddLog(Program.programName, "C#", "Project.Build", modLogging.eLogLevel.ERROR, $"Project '{Name}' build failed", Program.logMethod);
@@ -299,10 +299,10 @@ ORDER BY DeploymentGroup, RepoName
             if (!String.IsNullOrWhiteSpace(PublishDir))
             {
                 // TODO: do I want to switch to self-contained publishes?
-                Int32 exitCode = modCommandLine.RunCommand($"dotnet publish {Name}.{ProjectExtension} -c Release --no-build -o \"{PublishDir}\"", ProjectPath);
+                Int32 exitCode = modCommandLine.RunCommand($"dotnet publish {Name}{ProjectExtension} -c Release --no-build -o \"{PublishDir}\"", ProjectPath);
                 if (exitCode != 0)
                 {
-                    modLogging.AddLog(Program.programName, "C#", "Project.Publish", modLogging.eLogLevel.ERROR, $"Project '{Name}' build failed", Program.logMethod);
+                    modLogging.AddLog(Program.programName, "C#", "Project.Publish", modLogging.eLogLevel.ERROR, $"Project '{Name}' publish failed", Program.logMethod);
                     return false;
                 }
             }
