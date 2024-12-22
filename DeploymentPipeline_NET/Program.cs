@@ -1,4 +1,4 @@
-﻿using Newtonsoft.Json;
+﻿using Microsoft.Data.SqlClient;
 using System.Diagnostics;
 using System.Reflection;
 using Utilities_NetCore;
@@ -10,79 +10,114 @@ namespace DeploymentPipeline
         public static string programName = Assembly.GetExecutingAssembly().GetName().Name!;
 #if DEBUG
         public const modLogging.eLogMethod logMethod = modLogging.eLogMethod.CONSOLE;
+        public static readonly string projectDir = Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..\\..\\.."));
+        public static readonly string? connectionString = Environment.GetEnvironmentVariable("ConnectionStringDebug");
 #else
         public const modLogging.eLogMethod logMethod = modLogging.eLogMethod.DATABASE;
+        public static readonly string projectDir = Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, ".."));
+        public static readonly string? connectionString = Environment.GetEnvironmentVariable("ConnectionStringRelease");
 #endif
 
         static void Main(string[] args)
         {
-#if DEBUG
-            string projectDir = Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..\\..\\.."));
-            string? connectionString = Environment.GetEnvironmentVariable("ConnectionStringDebug");
-#else
-            // modLogging.AddLog(programName, "C#", "Program.Main", modLogging.eLogLevel.INFO, "Process started", logMethod);
-            string projectDir = Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, ".."));
-            string? connectionString = Environment.GetEnvironmentVariable("ConnectionStringRelease");
-#endif
-            string configFile = Path.Combine(projectDir, "appsettings.json");
-            dynamic config = JsonConvert.DeserializeObject(File.ReadAllText(configFile))!;
-            
-            var projects = config["projects"];
-
-            if (args.Length == 0)
+            try
             {
-                // no argument was passed, only check to see what applications are pending deployment
-                string htmlBody = "<h1><b>Projects Pending Deployment</b></h1>";  // document header
-                htmlBody += "<br>";
-                htmlBody += "<table>";
-                htmlBody += "<tr><th>Project Name</th></tr>";  // table column header
-
-                foreach (var entry in projects)
-                {
-                    var project = new Project(entry.Name, entry.Value);
-                    if (project.DoDeploy)
-                    {
-                        htmlBody += $"<tr><td>{project.Name}</td></tr>";  // table entry
-                    }
-                }
-
-                htmlBody += "</table>";
-
-                // write and open the report
-                string pendingDeploymentReport = Path.Combine(projectDir, "PendingDeployment.html");
-                File.WriteAllText(pendingDeploymentReport, htmlBody);
-                Process.Start(new ProcessStartInfo
-                {
-                    FileName = pendingDeploymentReport,
-                    UseShellExecute = true // Required for opening with the default application
-                });
-            }
-            else
-            {
-                // there was an argument (using "DEPLOY"), perform the deployment(s)
                 if (connectionString == null)
                 {
                     modLogging.AddLog(programName, "C#", "Program.Main", modLogging.eLogLevel.CRITICAL, "Unable to read connection string", logMethod);
                     Environment.Exit(-1);
                 }
 
-                string projectsDeployed = "";
-                foreach (var entry in projects)
+                var projects = new List<Project>();
+
+                var command = new SqlCommand();
+                command.Connection = modDatabase.Connection(connectionString);
+                command.CommandType = System.Data.CommandType.Text;
+                command.CommandText = @"
+SELECT
+RepoName,
+ProjectFilePath,
+GitBranch,
+PublishPath,
+PostDeployBatchFile
+
+FROM HuntHome.dev.Repositories
+
+WHERE AutomatedDeployment = 1
+AND DeploymentQueued = 1
+
+ORDER BY DeploymentGroup, RepoName
+";
+
+                using (var reader = command.ExecuteReader())
                 {
-                    var project = new Project(entry.Name, entry.Value);
-                    if (project.Deploy())
+                    while (reader.Read())
                     {
-                        projectsDeployed = modStrings.AppendText(projectsDeployed, entry.Name, ", ");
+                        var project = new Project(
+                            name: reader["RepoName"].ToString()!,
+                            projectfilepath: reader["ProjectFilePath"].ToString()!,
+                            branch: reader["GitBranch"].ToString()!,
+                            publishdir: reader["PublishPath"] != DBNull.Value ? reader["PublishPath"].ToString()! : string.Empty,
+                            postdeploybatchfile: reader["PostDeployBatchFile"] != DBNull.Value ? reader["PostDeployBatchFile"].ToString()! : string.Empty
+                        );
+
+                        projects.Add(project);
                     }
-                    // no need to have error handling/notifications if a deployment fails, that is handled in the AddLog call in each step
                 }
-#if !DEBUG
-                if (!String.IsNullOrWhiteSpace(projectsDeployed))
+                command.Dispose();
+
+                if (args.Length == 0)
                 {
-                    modNotifications.SendTelegramMessage($"A following projects have been deployed: {projectsDeployed}");
+                    // no argument was passed, only check to see what applications are pending deployment
+                    string htmlBody = "<h1><b>Projects Pending Deployment</b></h1>";  // document header
+                    htmlBody += "<br>";
+                    htmlBody += "<table>";
+                    htmlBody += "<tr><th>Project Name</th></tr>";  // table column header
+
+                    foreach (var project in projects)
+                    {
+                        htmlBody += $"<tr><td>{project.Name}</td></tr>";  // table entry
+                    }
+
+                    htmlBody += "</table>";
+
+                    // write and open the report
+                    string pendingDeploymentReport = Path.Combine(projectDir, "PendingDeployment.html");
+                    File.WriteAllText(pendingDeploymentReport, htmlBody);
+                    Process.Start(new ProcessStartInfo
+                    {
+                        FileName = pendingDeploymentReport,
+                        UseShellExecute = true // Required for opening with the default application
+                    });
                 }
-                // modLogging.AddLog(programName, "C#", "Program.Main", modLogging.eLogLevel.INFO, "Process ended", logMethod);
-#endif   
+                else if (args.Length == 1 && args[0].ToUpper() == "DEPLOY")
+                {
+                    // there was an argument (using "DEPLOY"), perform the deployment(s)
+                    string projectsDeployed = "";
+                    foreach (var project in projects)
+                    {
+                        if (project.Deploy())
+                        {
+                            projectsDeployed = modStrings.AppendText(projectsDeployed, project.Name, ", ");
+                        }
+                        // no need to have error handling/notifications if a deployment fails, that is handled in the AddLog call in each step
+                    }
+#if !DEBUG
+                    if (!String.IsNullOrWhiteSpace(projectsDeployed))
+                    {
+                        modNotifications.SendTelegramMessage($"A following projects have been deployed: {projectsDeployed}");
+                    }
+#endif
+                }
+                else
+                {
+                    // something unexpected occurred, log as such
+                    modLogging.AddLog(programName, "C#", "Program.Main", modLogging.eLogLevel.CRITICAL, $"Invalid arguments passed! Count = {args.Length}, First = {args[0]}", logMethod);
+                }
+            }
+            catch (Exception ex)
+            {
+                modLogging.AddLog(programName, "C#", "Program.Main", modLogging.eLogLevel.CRITICAL, $"Catastrohic error! {ex.Message} | {ex.StackTrace}", logMethod);
             }
         }
     }
@@ -92,34 +127,25 @@ namespace DeploymentPipeline
     /// </summary>
     internal class Project
     {
-        public bool Active { get; }
         public string Name { get; }
-        public string Directory { get; }
         public string Branch { get; }
-        public string Language { get; }
         public string PublishDir { get; }
         public string PostDeployBatchFile { get; }
-        public bool DoDeploy { get; }
-        public bool DoBuild { get; }
+
+        public string ProjectFile { get; }
+        public string ProjectPath { get; }
         public string ProjectExtension { get; }
-        public bool HasPostDeploy { get; }
 
-        private const string DeployFile = "deploy.txt";
-
-        public Project(string name, dynamic properties)
+        public Project(string name, string projectfilepath, string branch, string publishdir, string postdeploybatchfile)
         {
             Name = name;
-            Active = properties["active"];
-            Directory = properties["directory"];
-            Branch = properties["branch"];
-            Language = properties["language"];
-            PublishDir = properties["publishLocation"];
-            PostDeployBatchFile = properties["postDeployBatchFile"];
+            Branch = branch;
+            PublishDir = publishdir;
+            PostDeployBatchFile = postdeploybatchfile;
 
-            DoDeploy = CanDeploy();
-            DoBuild = CanBuild();
-            ProjectExtension = GetProjectExtension();
-            HasPostDeploy = CanPostDeploy();
+            ProjectFile = File.Exists(projectfilepath) ? projectfilepath : string.Empty;
+            ProjectPath = Path.GetDirectoryName(projectfilepath)!;
+            ProjectExtension = Path.GetExtension(projectfilepath);
         }
 
         /// <summary>
@@ -128,63 +154,63 @@ namespace DeploymentPipeline
         public bool Deploy()
         {
             bool deployed = false;
-            // if the trigger file exists, proceed with deployment
-            if (DoDeploy)
-            {
-                modLogging.AddLog(Program.programName, "C#", "Project.Deploy", modLogging.eLogLevel.INFO, $"Deploying project '{Name}'", Program.logMethod);
 
-                if (Pull())
+            modLogging.AddLog(Program.programName, "C#", "Project.Deploy", modLogging.eLogLevel.INFO, $"Deploying project '{Name}'", Program.logMethod);
+
+            if (Pull())
+            {
+                if (!CanBuild())
                 {
-                    if (!DoBuild)
+                    deployed = true;
+                }
+                else
+                {
+                    if (Build())
                     {
-                        deployed = true;
-                    }
-                    else
-                    {
-                        if (Build())
+                        if (Publish())
                         {
-                            if (Publish())
-                            {
-                                deployed = true;
-                            }
+                            deployed = true;
                         }
                     }
                 }
+            }
 
-                // remove the deployment trigger file
-                string deploymentFile = Path.Combine(Directory, DeployFile);
-                File.Delete(deploymentFile);
+            if (deployed)
+            {
+                // update DeploymentQueued to 0
+                var command = new SqlCommand();
+                command.Connection = modDatabase.Connection(Program.connectionString);
+                command.CommandType = System.Data.CommandType.Text;
+                command.CommandText = "UPDATE HuntHome.dev.Repositories SET DeploymentQueued = 0, LastDeployedDate = GETDATE() WHERE RepoName = @RepoName";
+                command.Parameters.AddWithValue("@RepoName", Name);
+                command.ExecuteNonQuery();
 
+                command.Dispose();
+
+                // install possible dependencies
                 deployed = InstallDependencies();
 
-                if (deployed && HasPostDeploy)
+                // execute post-deployment script if applicable
+                if (deployed && CanPostDeploy())
                 {
                     if (!PostDeploy())
                     {
                         deployed = false;
                     }
                 }
+            }
 
-                if (deployed)
-                {
-                    modLogging.AddLog(Program.programName, "C#", "Project.Deploy", modLogging.eLogLevel.INFO, $"Project '{Name}' deployment succeeded", Program.logMethod);
-                }
-                else
-                {
-                    modLogging.AddLog(Program.programName, "C#", "Project.Deploy", modLogging.eLogLevel.WARNING, $"Project '{Name}' deployment failed", Program.logMethod);
-                }
+            if (deployed)
+            {
+                modLogging.AddLog(Program.programName, "C#", "Project.Deploy", modLogging.eLogLevel.INFO, $"Project '{Name}' deployment succeeded", Program.logMethod);
+            }
+            else
+            {
+                // do not to indicate the specific error here, those are handled in the individual methods
+                modLogging.AddLog(Program.programName, "C#", "Project.Deploy", modLogging.eLogLevel.WARNING, $"Project '{Name}' deployment failed", Program.logMethod);
             }
 
             return deployed;
-        }
-
-        internal bool CanDeploy()
-        {
-            if (Active && File.Exists(Path.Combine(Directory, DeployFile)))
-            {
-                return true;
-            }
-            return false;
         }
 
         /// <summary>
@@ -192,24 +218,30 @@ namespace DeploymentPipeline
         /// </summary>
         internal bool CanBuild()
         {
-            bool canBuild = false;
-            switch (Language.ToUpper())
+            if (ProjectFile == string.Empty)
             {
-                case "PYTHON":
+                // this generally would only occur if the ProjectFilePath value in the database is a directory, i.e. a Python project
+                return false;
+            }
+
+            bool canBuild = true;
+            switch (ProjectExtension.ToLower())
+            {
+                case ".vbproj":
+                case ".csproj":
+                    break;
+                case ".pyproj":
                     canBuild = false;
                     break;
-                case "VB":
-                case "C#":
-                    canBuild = true;
-                    break;
                 default:
+                    modLogging.AddLog(Program.programName, "C#", "Project.CanBuild", modLogging.eLogLevel.ERROR, $"Project '{Name}' has an unsupported project file extension '{ProjectExtension}'", Program.logMethod);
                     canBuild = false;
                     break;
             }
 
             if (canBuild)
             {
-                if (!String.IsNullOrWhiteSpace(PublishDir) && !System.IO.Directory.Exists(PublishDir))
+                if (!String.IsNullOrWhiteSpace(PublishDir) && !Directory.Exists(PublishDir))
                 {
                     modLogging.AddLog(Program.programName, "C#", "Project.CanBuild", modLogging.eLogLevel.ERROR, $"Project '{Name}' has an invalid publish directory '{PublishDir}'", Program.logMethod);
                     canBuild = false;
@@ -217,27 +249,6 @@ namespace DeploymentPipeline
             }
 
             return canBuild;
-        }
-
-        /// <returns>
-        /// Visual Studio project extension for the language
-        /// </returns>
-        internal string GetProjectExtension()
-        {
-            switch (Language.ToUpper())
-            {
-                case "PYTHON":
-                    return "pyproj";
-                case "VB":
-                    return "vbproj";
-                case "C#":
-                    return "csproj";
-                default:
-                    modLogging.AddLog(Program.programName, "C#", "Project.GetProjectExtension", modLogging.eLogLevel.CRITICAL, $"Project language {Language} not supported", Program.logMethod);
-                    Environment.Exit(-1);
-                    break;
-            }
-            return "";
         }
 
         /// <summary>
@@ -257,7 +268,7 @@ namespace DeploymentPipeline
         /// </summary>
         internal bool Pull()
         {
-            Int32 exitCode = modCommandLine.RunCommand($"git pull origin {Branch}", Directory);
+            Int32 exitCode = modCommandLine.RunCommand($"git pull origin {Branch}", ProjectPath);
             if (exitCode != 0)
             {
                 modLogging.AddLog(Program.programName, "C#", "Project.Pull", modLogging.eLogLevel.ERROR, $"Git pull for project '{Name}' failed", Program.logMethod);
@@ -271,7 +282,7 @@ namespace DeploymentPipeline
         /// </summary>
         internal bool Build()
         {
-            Int32 exitCode = modCommandLine.RunCommand("dotnet build -c Release", Directory);
+            Int32 exitCode = modCommandLine.RunCommand("dotnet build -c Release", ProjectFile);
             if (exitCode != 0)
             {
                 modLogging.AddLog(Program.programName, "C#", "Project.Build", modLogging.eLogLevel.ERROR, $"Project '{Name}' build failed", Program.logMethod);
@@ -287,7 +298,8 @@ namespace DeploymentPipeline
         {
             if (!String.IsNullOrWhiteSpace(PublishDir))
             {
-                Int32 exitCode = modCommandLine.RunCommand($"dotnet publish {Name}.{ProjectExtension} -c Release --no-build -o \"{PublishDir}\"", Directory);
+                // TODO: do I want to switch to self-contained publishes?
+                Int32 exitCode = modCommandLine.RunCommand($"dotnet publish {Name}.{ProjectExtension} -c Release --no-build -o \"{PublishDir}\"", ProjectPath);
                 if (exitCode != 0)
                 {
                     modLogging.AddLog(Program.programName, "C#", "Project.Publish", modLogging.eLogLevel.ERROR, $"Project '{Name}' build failed", Program.logMethod);
@@ -302,12 +314,14 @@ namespace DeploymentPipeline
         /// </summary>
         internal bool InstallDependencies()
         {
-            switch (Language.ToUpper())
+            switch (ProjectExtension.ToLower())
             {
-                case "PYTHON":
-                    if (File.Exists(Path.Combine(Directory, "requirements.txt")))
+                case ".pyproj":
+                case "":
+                    // assuming if the extension doesn't exist, the project path was a directory and it is likely a Python project
+                    if (File.Exists(Path.Combine(ProjectPath, "requirements.txt")))
                     {
-                        Int32 exitCode = modCommandLine.RunCommand($"pip install -r requirements.txt", Directory);
+                        Int32 exitCode = modCommandLine.RunCommand($"pip install -r requirements.txt", ProjectPath);
                         if (exitCode != 0)
                         {
                             modLogging.AddLog(Program.programName, "C#", "Project.InstallRequirements", modLogging.eLogLevel.ERROR, $"Project '{Name}' requirements.txt install failed", Program.logMethod);
@@ -325,7 +339,7 @@ namespace DeploymentPipeline
         /// </summary>
         internal bool PostDeploy()
         {
-            Int32 exitCode = modCommandLine.RunCommand(PostDeployBatchFile, Directory);  // likely don't need this in the project directory, but will be consistent
+            Int32 exitCode = modCommandLine.RunCommand(PostDeployBatchFile, ProjectPath);  // likely don't need this in the project directory, but will be consistent
             if (exitCode != 0)
             {
                 modLogging.AddLog(Program.programName, "C#", "Project.PostDeploy", modLogging.eLogLevel.ERROR, $"Post-deploy for project '{Name}' failed", Program.logMethod);
