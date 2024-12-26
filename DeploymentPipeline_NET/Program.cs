@@ -132,9 +132,9 @@ ORDER BY DeploymentGroup, RepoName
         public string PublishDir { get; }
         public string PostDeployBatchFile { get; }
 
-        public string ProjectFile { get; }
         public string ProjectPath { get; }
-        public string ProjectExtension { get; }
+        public string ProjectFile { get; } = string.Empty;
+        public string ProjectExtension { get; } = string.Empty;
 
         public Project(string name, string projectfilepath, string branch, string publishdir, string postdeploybatchfile)
         {
@@ -143,9 +143,16 @@ ORDER BY DeploymentGroup, RepoName
             PublishDir = publishdir;
             PostDeployBatchFile = postdeploybatchfile;
 
-            ProjectFile = File.Exists(projectfilepath) ? projectfilepath : string.Empty;
-            ProjectPath = Path.GetDirectoryName(projectfilepath)!;
-            ProjectExtension = Path.GetExtension(projectfilepath);
+            if (File.Exists(projectfilepath))
+            {
+                ProjectPath = Path.GetDirectoryName(projectfilepath)!;
+                ProjectFile = projectfilepath;
+                ProjectExtension = Path.GetExtension(projectfilepath);
+            }
+            else
+            {
+                ProjectPath = projectfilepath;
+            }
         }
 
         /// <summary>
@@ -224,6 +231,7 @@ ORDER BY DeploymentGroup, RepoName
                 return false;
             }
 
+            // due to the above check, we do not need to switch against string.Empty
             bool canBuild = true;
             switch (ProjectExtension.ToLower())
             {
